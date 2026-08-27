@@ -73,8 +73,9 @@ const worker = {
         const isTrade = tags.some((tag: string) => tag === "TRADE" || tag === "FREELANCE");
         const stored = await loadSettingsForShop(env, "buwngz-kc.myshopify.com");
         const state = normalizeAustralianState(rate.destination.province_code || rate.destination.province || "");
-        const bulkyVariants = new Set(JSON.parse(stored.bulkyVariantIds || "[]") as string[]);
-        const hasBulky = rate.items.some((item:any)=>bulkyVariants.has(String(item.variant_id || item.variantId || "")));
+        const bulkyVariants = new Set((JSON.parse(stored.bulkyVariantIds || "[]") as string[]).map(normalizeShopifyId));
+        const bulkyProducts = new Set((JSON.parse(stored.bulkyProducts || "[]") as Array<{id?:string}>).map(product=>normalizeShopifyId(product.id)).filter(Boolean));
+        const hasBulky = rate.items.some((item:any)=>bulkyVariants.has(normalizeShopifyId(item.variant_id || item.variantId)) || bulkyProducts.has(normalizeShopifyId(item.product_id || item.productId)));
         const retailSettings = parseRetailSettings(stored.retailSettings);
         const chosenRule = hasBulky ? retailSettings.bulkyRule : (retailSettings.states[state] || retailSettings.defaultRule);
         const needsLiveRate = isTrade || chosenRule.mode === "live";
@@ -174,6 +175,7 @@ async function loadSettingsForShop(env: Env, shop: string): Promise<StoredSettin
 
 function parseRetailSettings(raw?:string){const base={mode:"flat",standard:10,express:20,freeThreshold:100};const states=Object.fromEntries(["NSW","VIC","QLD","SA","WA","NT","TAS","ACT"].map(s=>[s,{...base,mode:s==="WA"||s==="NT"?"live":"flat"}]));try{const p=raw?JSON.parse(raw):{};return{defaultRule:{...base,...p.defaultRule},bulkyRule:{...base,mode:"live",...p.bulkyRule},states:{...states,...p.states}}}catch{return{defaultRule:base,bulkyRule:{...base,mode:"live"},states}}}
 function normalizeAustralianState(value:unknown){const state=String(value||"").trim().toUpperCase();const names:Record<string,string>={"NEW SOUTH WALES":"NSW","VICTORIA":"VIC","QUEENSLAND":"QLD","SOUTH AUSTRALIA":"SA","WESTERN AUSTRALIA":"WA","NORTHERN TERRITORY":"NT","TASMANIA":"TAS","AUSTRALIAN CAPITAL TERRITORY":"ACT"};return names[state]||state}
+function normalizeShopifyId(value:unknown){const id=String(value||"").trim();return id.includes("/")?id.slice(id.lastIndexOf("/")+1):id}
 
 async function quoteAusPostContract(settings: StoredSettings, postcode: string, weight: number) {
   if (!settings.ausPostApiUrl || !settings.ausPostUsername || !settings.ausPostPassword || !settings.ausPostAccountNumber || !settings.originPostcode) return [];
@@ -241,7 +243,7 @@ async function handleSettings(request: Request, env: Env): Promise<Response> {
   } else if (body.carrier === "Bulky products") {
     const products = Array.isArray((body as any).products) ? (body as any).products : [];
     settings.bulkyProducts = JSON.stringify(products.map((p:any)=>({id:String(p.id),title:String(p.title)})));
-    settings.bulkyVariantIds = JSON.stringify(products.flatMap((p:any)=>Array.isArray(p.variantIds)?p.variantIds.map(String):[]));
+    settings.bulkyVariantIds = JSON.stringify(products.flatMap((p:any)=>Array.isArray(p.variantIds)?p.variantIds.map((id:unknown)=>normalizeShopifyId(id)):[]));
   } else if (body.carrier === "Retail rules") {
     settings.retailSettings = JSON.stringify((body as any).retailSettings || {});
   } else return Response.json({ error: "Unknown carrier." }, { status: 400 });
